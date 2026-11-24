@@ -1,0 +1,50 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -e
+
+if ! command -v nh >/dev/null; then
+    echo "Install NetHunter Rootless before running this script."
+    exit 1
+fi
+
+nh bash -s <<'KALI'
+set -e
+
+# Repair a missing or empty DNS configuration when lookup fails.
+if ! getent ahostsv4 http.kali.org >/dev/null && [ ! -s /etc/resolv.conf ]; then
+    echo "Configuring Kali DNS using Cloudflare and Google."
+    if [ -L /etc/resolv.conf ]; then
+        sudo mv --backup=numbered /etc/resolv.conf /etc/resolv.conf.old-link
+    fi
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf >/dev/null
+fi
+
+loaders_ready() {
+    local package version
+    for package in libglycin-2-0 glycin-loaders; do
+        version=$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null) || return 1
+        dpkg --compare-versions "$version" ge 2.2 || return 1
+    done
+}
+
+if ! loaders_ready; then
+    if ! getent ahostsv4 http.kali.org >/dev/null; then
+        echo "Kali cannot resolve http.kali.org. Check your network and /etc/resolv.conf."
+        exit 1
+    fi
+    sudo apt-get -o APT::Update::Error-Mode=any update
+    sudo apt-get -y --no-remove install libglycin-2-0 glycin-loaders
+    if ! loaders_ready; then
+        echo "The workaround requires Glycin 2.2 or newer."
+        exit 1
+    fi
+fi
+
+if [ ! -s "$HOME/.config/tigervnc/passwd" ] && [ ! -s "$HOME/.vnc/passwd" ]; then
+    echo "Set your KeX password."
+    vncpasswd </dev/tty
+fi
+
+# Disable the Glycin image-loader sandbox for this desktop session.
+export GLYCIN_DISABLE_SANDBOX=i-know-the-risks
+vncserver :1 -useold -localhost yes
+KALI
