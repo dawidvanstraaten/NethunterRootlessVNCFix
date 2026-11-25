@@ -1,12 +1,52 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
 
+# Optional Android-side setup for sessions terminated with signal 9.
+if [[ ${1:-} == --signal9 ]]; then
+    sdk=$(getprop ro.build.version.sdk)
+    if [[ ! $sdk =~ ^[0-9]+$ ]]; then
+        echo "Could not determine the Android version. Run this from Termux."
+        exit 1
+    fi
+    echo "Android SDK $sdk. These controls affect child processes across the phone."
+    if (( sdk >= 34 )); then
+        echo "In Developer options, turn ON 'Disable child process restrictions'."
+        echo "If Developer options is hidden, enable it by tapping Build number seven times."
+        echo "Return to Termux when finished."
+        am start -a android.settings.APPLICATION_DEVELOPMENT_SETTINGS >/dev/null 2>&1 ||
+            echo "Open Settings > System > Developer options manually."
+    elif (( sdk >= 32 )); then
+        cat <<'ADB'
+Enable USB debugging and connect the phone to your PC. In PowerShell, from
+the platform-tools folder, run these with only the intended phone connected:
+  .\adb.exe devices
+  .\adb.exe shell settings put global settings_enable_monitor_phantom_procs false
+  .\adb.exe shell settings get global settings_enable_monitor_phantom_procs
+The last command should print false. To restore the default:
+  .\adb.exe shell settings delete global settings_enable_monitor_phantom_procs
+ADB
+    elif (( sdk == 31 )); then
+        echo "Android 12 (SDK 31) uses a different ADB procedure. See:"
+        echo "https://github.com/agnostic-apollo/Android-Docs/blob/master/en/docs/apps/processes/phantom-cached-and-empty-processes.md"
+    else
+        echo "This Android 12+ phantom-process workaround does not apply to this version."
+    fi
+    echo "Run ~/vnc-fix to launch the desktop."
+    exit 0
+fi
+
 if ! command -v nh >/dev/null; then
     echo "Install NetHunter Rootless before running this script."
     exit 1
 fi
 
-nh bash -s <<'KALI'
+case ${1:-} in
+    '') mode=start ;;
+    --install) mode=install ;;
+    *) echo "Usage: vnc-fix [--install|--signal9]" >&2; exit 2 ;;
+esac
+
+nh bash -s -- "$mode" <<'KALI'
 set -e
 
 # Repair a missing or empty DNS configuration when lookup fails.
@@ -42,6 +82,22 @@ fi
 if [ ! -s "$HOME/.config/tigervnc/passwd" ] && [ ! -s "$HOME/.vnc/passwd" ]; then
     echo "Set your KeX password."
     vncpasswd </dev/tty
+fi
+
+if [ "$1" = install ]; then
+    launcher=/usr/bin/kex
+    fixed='GLYCIN_DISABLE_SANDBOX=i-know-the-risks vncserver "$SCREEN" -localhost yes'
+    if ! grep -Fq "$fixed" "$launcher"; then
+        if ! grep -Eq '^[[:space:]]*vncserver "\$SCREEN" -localhost no[[:space:]]*$' "$launcher"; then
+            echo "Unrecognized KeX launcher. Leaving it untouched." >&2
+            exit 1
+        fi
+        sudo cp -pn "$launcher" "$launcher.before-vnc-fix"
+        sudo sed -i 's|^\([[:space:]]*\)vncserver "\$SCREEN" -localhost no[[:space:]]*$|\1GLYCIN_DISABLE_SANDBOX=i-know-the-risks vncserver "$SCREEN" -localhost yes|' "$launcher"
+    fi
+    grep -Fq "$fixed" "$launcher"
+    echo "KeX launcher configured. From Termux, start it with: nh kex &"
+    exit 0
 fi
 
 # Disable the Glycin image-loader sandbox for this desktop session.
